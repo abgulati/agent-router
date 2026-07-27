@@ -1,0 +1,25 @@
+# VSCode Files
+.vscode/
+.code-workspace
+
+# Environment Variables
+.env
+
+# Config Files
+*.json
+
+# Logs
+logs/
+
+# Temporary Files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyzwz
+*.pyzwzw
+*.pyzwzwz
