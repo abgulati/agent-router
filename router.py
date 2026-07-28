@@ -266,6 +266,17 @@ def get_completions_compatible_llm_classifier_request_object(
         handle_local_error("Error getting completions-compatible LLM classifier request object: ", e)
 
 
+def add_auth_to_header(headers: dict, auth_type: str, auth_value: str) -> dict:
+    authed_header = headers.copy()
+    if auth_type == "bearerToken" and auth_value:
+        authed_header['Authorization'] = f'Bearer {auth_value}'
+    elif auth_type in (None, "none"):
+        pass # local unauthenticated provider
+    else:
+        raise RuntimeError(f"Invalid auth type: {auth_type}")
+    return authed_header
+
+
 def select_provider_by_llm_classifier(
     llm_classifier_provider_name: str,
     llm_classifier_model_id: str,
@@ -294,11 +305,16 @@ def select_provider_by_llm_classifier(
         headers = {
             'Content-Type': 'application/json'
         }
+        authed_header = add_auth_to_header(
+            headers,
+            classifier_provider_details.get("authType"),
+            classifier_provider_details.get("bearerToken")
+        )
         
         classifier_response = requests.request(
             "POST",
             classifier_url,
-            headers=headers,
+            headers=authed_header,
             data=completions_request_payload,
             timeout=30
         )

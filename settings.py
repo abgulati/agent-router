@@ -26,7 +26,8 @@ def get_provider_base_settings() -> dict:
         "name": "",
         "vendor": "",
         "description": "",
-        "apiKey": "",
+        "authType": None,   # None, "bearerToken"
+        "bearerToken": "",
         "apiType": "chat-completions",
         "enabled": False,
         "models": [
