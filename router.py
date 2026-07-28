@@ -9,7 +9,7 @@ import json
 import math
 import os
 
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, stream_with_context
 from flask_cors import CORS
 
 from waitress import serve
@@ -145,18 +145,20 @@ def add_auth_to_header(headers: dict, auth_type: str, auth_value: str) -> dict:
     return authed_header
 
 
-def handle_openai_streaming(selected_provider_and_model: dict, request: request) -> Response:
+def handle_openai_streaming(
+    selected_provider_and_model: dict,
+    request: request
+) -> Response:
+    '''
+    client thinks:
+    client <---- SSE stream ---- LLM provider
+
+    actual:
+    client <---- SSE stream ---- router <---- SSE stream ---- provider
+    '''
     try:
         print_observability("\nHandling OpenAI streaming response...\n")
-
-    except Exception as e:
-        handle_local_error("Error handling OpenAI streaming response: ", e)
-
-
-def handle_openai_non_streaming(selected_provider_and_model: dict, request: request) -> Response:
-    try:
-        print_observability("\nHandling OpenAI non-streaming response...\n")
-
+        
         selected_provider = selected_provider_and_model.get("provider")
         selected_model = selected_provider_and_model.get("model")
 
@@ -179,6 +181,71 @@ def handle_openai_non_streaming(selected_provider_and_model: dict, request: requ
 
         payload = request.get_json()
         payload["model"] = selected_model["id"]
+        payload["stream"] = True
+
+        upstream = requests.post(
+            selected_model["url"],
+            headers=authed_header,
+            json=payload,
+            timeout=selected_model.get("timeout", 300),
+            stream=True,
+        )
+
+        # Reconstruct a Flask response, forwarding safe upstream headers back
+        passthrough_headers = {
+            k: v for k, v in upstream.headers.items()
+            if k.lower() not in PASSTHROUGH_STRIP
+        }   # see above for stripping details
+
+        # Helpful for SSE-style OpenAI streaming
+        passthrough_headers.setdefault('Content-Type', 'text/event-stream')
+        passthrough_headers.setdefault('Cache-Control', 'no-cache')
+        passthrough_headers.setdefault('X-Accel-Buffering', 'no') # in-case behind Nginx
+        # tells Nginx not to buffer the response - not part of the OpenAi spec but harmless
+
+        def generate():
+            try:
+                for chunk in upstream.iter_content(chunk_size=None):    # check iter def for details
+                    if chunk:
+                        yield chunk
+            finally:
+                upstream.close()
+
+        return Response(
+            stream_with_context(generate()),
+            status=upstream.status_code,
+            headers=passthrough_headers,
+            direct_passthrough=True,    # check Response/ResponseBase
+        )
+
+    except Exception as e:
+        handle_local_error("Error handling OpenAI streaming response: ", e)
+
+
+def handle_openai_non_streaming(
+    selected_provider_and_model: dict,
+    request: request
+) -> Response:
+    try:
+        print_observability("\nHandling OpenAI non-streaming response...\n")
+
+        selected_provider = selected_provider_and_model.get("provider")
+        selected_model = selected_provider_and_model.get("model")
+
+        outgoing_headers = {
+            k: v for k, v in request.headers.items()
+            if k.lower() not in OUTGOING_STRIP
+        }
+        outgoing_headers['content-type'] = 'application/json'
+
+        authed_header = add_auth_to_header(
+            outgoing_headers,
+            selected_provider.get("authType"),
+            selected_provider.get("bearerToken")
+        )
+
+        payload = request.get_json()
+        payload["model"] = selected_model["id"]
 
         upstream = requests.post(
             selected_model["url"],
@@ -187,11 +254,10 @@ def handle_openai_non_streaming(selected_provider_and_model: dict, request: requ
             timeout=selected_model.get("timeout", 300) # 5 minutes default
         )
 
-        # Reconstruct a Flask response, forwarding safe upstream headers back
         passthrough_headers = {
             k: v for k, v in upstream.headers.items()
             if k.lower() not in PASSTHROUGH_STRIP
-        }   # see above for stripping details
+        }   # see streaming route above for stripping details
 
         return Response(
             upstream.content,
