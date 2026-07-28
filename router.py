@@ -124,13 +124,83 @@ def config_writer_api():
 
 ############################----------------------------------------------###############################
 
+HOP_BY_HOP = {
+    'connection', 'keep-alive', 'proxy-authenticate',
+    'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade',
+}   # These headers are not forwardable and should be removed by a proxy per HTTP spec
+# "hop-by-hop" official definition: https://datatracker.ietf.org/doc/html/rfc7230#section-6.1
 
-def handle_openai_streaming(selected_provider: dict, data: dict) -> Response:
-    pass
+OUTGOING_STRIP     = HOP_BY_HOP | {'host', 'authorization', 'content-length'}
+PASSTHROUGH_STRIP  = HOP_BY_HOP | {'content-encoding', 'content-length'}
 
 
-def handle_openai_non_streaming(selected_provider: dict, data: dict) -> dict:
-    pass
+def add_auth_to_header(headers: dict, auth_type: str, auth_value: str) -> dict:
+    authed_header = headers.copy()
+    if auth_type == "bearerToken" and auth_value:
+        authed_header['Authorization'] = f'Bearer {auth_value}'
+    elif auth_type in (None, "none"):
+        pass # local unauthenticated provider
+    else:
+        raise RuntimeError(f"Invalid auth type: {auth_type}")
+    return authed_header
+
+
+def handle_openai_streaming(selected_provider_and_model: dict, request: request) -> Response:
+    try:
+        print_observability("\nHandling OpenAI streaming response...\n")
+
+    except Exception as e:
+        handle_local_error("Error handling OpenAI streaming response: ", e)
+
+
+def handle_openai_non_streaming(selected_provider_and_model: dict, request: request) -> Response:
+    try:
+        print_observability("\nHandling OpenAI non-streaming response...\n")
+
+        selected_provider = selected_provider_and_model.get("provider")
+        selected_model = selected_provider_and_model.get("model")
+
+        outgoing_headers = {
+            k: v for k, v in request.headers.items()
+            if k.lower() not in OUTGOING_STRIP
+        }
+        '''
+        Host / Authorization stripped because they're router-specific
+        Content-Length / Content-Encoding: stripped because body is transformed here.
+        Content-Length is also recomputed by Flask for the body returned.
+        '''
+        outgoing_headers['content-type'] = 'application/json'
+
+        authed_header = add_auth_to_header(
+            outgoing_headers,
+            selected_provider.get("authType"),
+            selected_provider.get("bearerToken")
+        )
+
+        payload = request.get_json()
+        payload["model"] = selected_model["id"]
+
+        upstream = requests.post(
+            selected_model["url"],
+            headers=authed_header,
+            json=payload,
+            timeout=selected_model.get("timeout", 300) # 5 minutes default
+        )
+
+        # Reconstruct a Flask response, forwarding safe upstream headers back
+        passthrough_headers = {
+            k: v for k, v in upstream.headers.items()
+            if k.lower() not in PASSTHROUGH_STRIP
+        }   # see above for stripping details
+
+        return Response(
+            upstream.content,
+            status=upstream.status_code,
+            headers=passthrough_headers,
+        )
+
+    except Exception as e:
+        handle_local_error("Error handling OpenAI non-streaming response: ", e)
 
 
 CHARS_PER_TOKEN = 3
@@ -282,17 +352,6 @@ def get_completions_compatible_llm_classifier_request_object(
 
     except Exception as e:
         handle_local_error("Error getting completions-compatible LLM classifier request object: ", e)
-
-
-def add_auth_to_header(headers: dict, auth_type: str, auth_value: str) -> dict:
-    authed_header = headers.copy()
-    if auth_type == "bearerToken" and auth_value:
-        authed_header['Authorization'] = f'Bearer {auth_value}'
-    elif auth_type in (None, "none"):
-        pass # local unauthenticated provider
-    else:
-        raise RuntimeError(f"Invalid auth type: {auth_type}")
-    return authed_header
 
 
 def select_provider_by_llm_classifier(
