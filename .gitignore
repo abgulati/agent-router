@@ -1,6 +1,6 @@
 # VSCode Files
 .vscode/
-.code-workspace
+*.code-workspace
 
 # Environment Variables
 .env
