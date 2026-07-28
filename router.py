@@ -413,8 +413,12 @@ def select_provider_by_llm_classifier(
         model_id = parsed_model_as_args.get("model")
         
         selected_provider = providers_by_name.get(provider_name)
-        selected_provider_models_dict = {m["id"]: m for m in selected_provider.get("models", [])}
-        selected_model = selected_provider_models_dict.get(model_id)
+        selected_model = None
+        if selected_provider:
+            selected_provider_models_dict = {
+                m["id"]: m for m in selected_provider.get("models", [])
+            }
+            selected_model = selected_provider_models_dict.get(model_id)
         
         if not selected_provider or not selected_model:
             raise RuntimeError(f"Provider {provider_name} or model {model_id} not found")
