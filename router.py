@@ -70,6 +70,24 @@ def handle_local_error(message:str, exception:Exception=None):
 def handle_error_no_return(message:str, exception:Exception=None):
     _ = central_error_logging(message, exception)
 
+def handle_completions_error(
+    message:str,
+    exception:Exception=None,
+    error_type:str="server_error",
+    param:str=None,
+    error_sub_code:str=None,
+    http_status_code:int=500
+) -> tuple[Response, int]:
+    err_obj = {
+        "message": message,
+        "type": error_type,
+        "param": param,
+        "code": error_sub_code
+    }
+    _ = central_error_logging(message, exception)
+    return jsonify(error=err_obj), http_status_code
+
+
 ############################----------------------------------------------###############################
 
 
@@ -474,23 +492,23 @@ def openai_compatible_api():
     OpenAI-compatible chat completions endpoint that routes to available providers.
     """
 
-    print("\n\n========== OPENAI API REQUEST ==========")
-    print(f"Headers: {dict(request.headers)}")
-    print(f"Body: {request.get_data(as_text=True)}")
-    print("==========================================\n\n")
+    route_invoked_log = f'''
+    \n\n========== OPENAI API REQUEST ==========\n
+    Headers: {dict(request.headers)}\n
+    Body: {request.get_data(as_text=True)}\n
+    ==========================================\n\n
+    '''
+    print_observability(route_invoked_log)
 
     print("\n\nOpenAI v1/chat/completions route triggered\n\n")
     
     providers = get_available_providers()
     if not providers:
-        return jsonify(
-            error={
-                "message": "No providers configured/enabled",
-                "type": "server_error",
-                "param": None,
-                "code": None
-            }
-        ), 503 # Service Unavailable
+        return handle_completions_error(
+            "No providers configured/enabled",
+            error_type="server_error",
+            http_status_code=503 # Service Unavailable
+        )
     providers_by_name = {p["name"]: p for p in providers}
     
     try:
@@ -508,32 +526,50 @@ def openai_compatible_api():
         print_observability(f"\nStream: {stream}\n")
         
     except Exception as e:
-        return jsonify(
-            error={
-                "message": f"Invalid request format: {str(e)}",
-                "type": "invalid_request_error",
-                "param": None,
-                "code": None
-            }
-        ), 400
+        return handle_completions_error(
+            f"Invalid request format: {str(e)}",
+            exception=e,
+            error_type="invalid_request_error",
+            param=None,
+            error_sub_code=None,
+            http_status_code=400
+        )
 
     try:
-        selected_provider = select_provider(providers_by_name, data)
+        selected_provider_and_model = select_provider(providers_by_name, data)
     except Exception as e:
-        return jsonify(
-            error={
-                "message": f"Error selecting provider: {str(e)}",
-                "type": "server_error",
-                "param": None,
-                "code": None
-            }
-        ), 500
-    
-    if stream:
-        return handle_openai_streaming(selected_provider, data)
-    else:
-        return handle_openai_non_streaming(selected_provider, data)
+        return handle_completions_error(
+            f"Error selecting provider: {str(e)}",
+            exception=e,
+            error_type="server_error",
+            param=None,
+            error_sub_code=None,
+            http_status_code=500
+        )
 
+    selected_provider_api_type = selected_provider_and_model.get("provider").get("apiType")
+
+    if selected_provider_api_type == "chat-completions":
+        try:
+            if stream:
+                return handle_openai_streaming(selected_provider_and_model, request)
+            else:
+                return handle_openai_non_streaming(selected_provider_and_model, request)
+        except Exception as e:
+            return handle_completions_error(
+                f"Error handling OpenAI chat-completions response: {str(e)}",
+                exception=e,
+                error_type="server_error",
+                param=None,
+                error_sub_code=None,
+                http_status_code=500
+            )
+    else:
+        return handle_completions_error(
+            f"Invalid API type: {selected_provider_api_type}",
+            error_type="server_error",
+            http_status_code=500
+        )
 
 
 
