@@ -19,7 +19,7 @@ CORS(app)
 
 
 #########################------------Observability & Error Logging-------------###############################
-OBSERVA_PRINTABILITY = False
+OBSERVA_PRINTABILITY = True
 def print_observability(*messages: object):
     if OBSERVA_PRINTABILITY:
         print(*messages)
@@ -294,8 +294,8 @@ def estimate_request_tokens(data: dict) -> dict:
 
 
         print_observability(
-            f"Estimated request token count: {estimated_request_token_count}"
-            f"Total tools: {total_tools}"
+            f"Estimated request token count: {estimated_request_token_count}\n"
+            f"Total tools: {total_tools}\n"
         )
         return {
             "request_token_count": estimated_request_token_count,
@@ -536,12 +536,16 @@ def select_provider_by_token_threshold(
                 ):
                     continue
 
+                print_observability(f"\nEvaluating provider: {provider_name}\n")
+
                 models_by_id = {
                     m["id"]: m for m in providers_by_name[provider_name].get("models", [])
                 }   # models configured for this provider
                 
                 if model_id not in models_by_id:
                     continue
+
+                print_observability(f"\nModel: {model_id} found in provider: {provider_name}\n")
                
                 min_viable_threshold = provider_spec.get("maxInputTokens")
                 selected_provider = providers_by_name[provider_name]
@@ -550,7 +554,11 @@ def select_provider_by_token_threshold(
                 print_observability(f"\nNew viable provider found: {provider_name} with model {model_id}\n")
 
         if selected_provider is None or selected_model is None:
-            raise RuntimeError("No viable provider found")
+            raise RuntimeError(
+                "No viable provider found\n"
+                f"Selected provider: {selected_provider}\n"
+                f"Selected model: {selected_model}\n"
+            )
         
         token_threshold_selection = {
             "provider": selected_provider,
@@ -631,29 +639,25 @@ def openai_compatible_api():
 
     print("\n\nOpenAI v1/chat/completions route triggered\n\n")
     
-    providers = get_available_providers()
-    if not providers:
+    try:
+        providers = get_available_providers()
+        if not providers:
+            raise RuntimeError("No providers configured/enabled")
+        providers_by_name = {p["name"]: p for p in providers}
+    except Exception as e:
         return handle_completions_error(
-            "No providers configured/enabled",
+            f"Error getting available providers: {str(e)}",
+            exception=e,
             error_type="server_error",
-            http_status_code=503 # Service Unavailable
+            param=None,
+            error_sub_code=None,
+            http_status_code=500
         )
-    providers_by_name = {p["name"]: p for p in providers}
     
     try:
         data = request.json
         if isinstance(data, str):
             data = json.loads(data)
-        
-        # Completions-compatible parameters
-        messages = data.get('messages', [])
-        tools = data.get('tools', None)
-        stream = data.get('stream', False)
-
-        print_observability(f"\nRaw Messages: {json.dumps(messages, indent=4)}\n")
-        print_observability(f"\Completions Tools: {json.dumps(tools, indent=4)}\n")
-        print_observability(f"\nStream: {stream}\n")
-        
     except Exception as e:
         return handle_completions_error(
             f"Invalid request format: {str(e)}",
@@ -680,7 +684,7 @@ def openai_compatible_api():
 
     if selected_provider_api_type == "chat-completions":
         try:
-            if stream:
+            if data.get("stream", False):
                 return handle_openai_streaming(selected_provider_and_model, request)
             else:
                 return handle_openai_non_streaming(selected_provider_and_model, request)
