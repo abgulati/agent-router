@@ -323,6 +323,44 @@ curl http://localhost:8765/write_config \
   }'
 ```
 
+## Troubleshooting
+
+### Router fails to start
+
+- **Port already in use**: If you see an address-in-use error, another process is bound to port 8765. Either stop the other process or start the router on a different port:
+  ```bash
+  python router.py --router_serving_port 9000
+  ```
+- **Missing dependencies**: Run `pip install -r requirements.txt` to ensure all packages are installed.
+
+### Requests fail with connection errors
+
+- **Provider unreachable**: Check that the provider URL in `config.json` is correct and the backend service is running. Test connectivity with:
+  ```bash
+  curl http://<provider-host>:<port>/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model":"<model-id>","messages":[{"role":"user","content":"hi"}]}'
+  ```
+- **Auth failures**: If using `bearerToken` authentication, verify the token in `config.json` is valid and has not expired.
+
+### Routing not behaving as expected
+
+- **Wrong provider selected**: Check the `routing_strategy` and corresponding settings in `config.json`. For `token_threshold`, ensure the thresholds cover the expected request sizes. For `llm_classifier`, verify the classifier provider is reachable and correctly configured.
+- **Classifier provider errors**: If the classifier provider is down or returns an error, the router may fall back to a default or fail. Check the `logs/` directory for detailed error messages.
+
+### Config issues
+
+- **Stale or corrupted config**: Reset to defaults:
+  ```bash
+  python router.py --reset_to_defaults
+  ```
+- **Config not persisting**: Ensure the working directory has write permissions so `config.json` can be saved.
+
+### General
+
+- Check the `logs/` directory for detailed runtime logs.
+- Use the config API endpoints (`/read_config`, `/write_config`) to inspect or update settings at runtime.
+
 ## Notes
 
 - `config.json` may contain bearer tokens and is intentionally ignored by git.

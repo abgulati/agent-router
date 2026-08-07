@@ -19,7 +19,7 @@ CORS(app)
 
 
 #########################------------Observability & Error Logging-------------###############################
-OBSERVA_PRINTABILITY = True
+OBSERVA_PRINTABILITY = False
 def print_observability(*messages: object):
     if OBSERVA_PRINTABILITY:
         print(*messages)
@@ -271,6 +271,22 @@ def handle_openai_non_streaming(
 
 CHARS_PER_TOKEN = 3
 def estimate_request_tokens(data: dict) -> dict:
+    """
+    Estimate the number of tokens in a request payload.
+
+    Methodology:
+    - Extracts the 'messages' field from the input data, as it is the primary contributor to token count.
+    - Serializes the extracted payload to a JSON string.
+    - Estimates the token count by dividing the length of the JSON string by a constant (CHARS_PER_TOKEN),
+      which approximates the average number of characters per token.
+    - Returns a dictionary containing the estimated token count, the serialized text, and the total number of tools.
+
+    Args:
+        data (dict): The request payload containing 'messages' and optionally 'tools'.
+
+    Returns:
+        dict: A dictionary with keys 'request_token_count', 'text', and 'total_tools'.
+    """
     try:
         token_relevant_payload = {
             "messages": data.get("messages", []),
@@ -670,6 +686,10 @@ def openai_compatible_api():
 
     try:
         selected_provider_and_model = select_provider(providers_by_name, data)
+        print(
+            "\n\nSelected provider and model:\n"
+            f"{json.dumps(selected_provider_and_model, indent=4)}\n\n"
+        )
     except Exception as e:
         return handle_completions_error(
             f"Error selecting provider: {str(e)}",
